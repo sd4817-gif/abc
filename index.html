@@ -1,0 +1,390 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <title>靈魂之塔 - Tower of Souls</title>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Cinzel:wght@400;700&display=swap');
+        
+        body { margin: 0; background: #000; display: flex; justify-content: center; align-items: center; height: 100vh; color: #e0e0e0; font-family: 'Cinzel', serif; overflow: hidden; }
+        canvas { background: #0a0a0f; border: 5px solid #2c2c2e; box-shadow: 0 0 100px rgba(0,212,255,0.1) inset; display: none; }
+        
+        .menu-overlay { text-align: center; z-index: 100; background: radial-gradient(circle, #1a1a2e 0%, #000 100%); width: 100%; height: 100%; display: flex; flex-direction: column; justify-content: center; align-items: center; position: absolute; }
+        h1 { font-size: 84px; margin: 0; color: #d4af37; text-shadow: 0 0 30px rgba(212,175,55,0.4); letter-spacing: 15px; }
+        .btn { padding: 18px 50px; font-size: 24px; font-family: 'Cinzel', serif; background: transparent; border: 1px solid #d4af37; color: #d4af37; cursor: pointer; transition: 0.5s; margin-top: 20px; }
+        .btn:hover { background: #d4af37; color: #000; box-shadow: 0 0 40px #d4af37; transform: scale(1.05); }
+
+        #instruction-screen { display: none; }
+        .info-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 30px; max-width: 800px; text-align: left; margin: 40px 0; background: rgba(255,255,255,0.05); padding: 30px; border: 1px solid #333; }
+        .info-item b { color: #00d4ff; font-size: 20px; }
+
+        #game-ui { display: none; position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; padding: 30px; box-sizing: border-box; }
+        .player-stats { position: absolute; top: 30px; left: 30px; }
+        .hp-container { display: flex; gap: 8px; margin-bottom: 15px; }
+        .hp-unit { width: 22px; height: 22px; background: #ff4d4d; border: 2px solid #ffd700; transform: rotate(45deg); box-shadow: 0 0 10px #ff4d4d; }
+        .hp-unit.lost { background: #1a1a1a; border-color: #333; box-shadow: none; opacity: 0.5; }
+        .soul-bar-bg { width: 240px; height: 12px; background: rgba(255,255,255,0.05); border: 1px solid #00ffff; border-radius: 20px; overflow: hidden; }
+        #soul-fill { height: 100%; background: linear-gradient(90deg, #008299, #00ffff); width: 0%; transition: width 0.4s; }
+
+        #boss-container { position: absolute; top: 100px; left: 50%; transform: translateX(-50%); width: 700px; text-align: center; display: none; }
+        #boss-name { font-size: 24px; color: #bf40bf; margin-bottom: 8px; letter-spacing: 10px; text-shadow: 0 0 15px #bf40bf; }
+        .boss-hp-bg { width: 100%; height: 8px; background: rgba(0,0,0,0.8); border: 1px solid #bf40bf; }
+        #boss-hp-fill { height: 100%; background: linear-gradient(90deg, #4b0082, #bf40bf); width: 100%; transition: width 0.2s; box-shadow: 0 0 15px #bf40bf; }
+    </style>
+</head>
+<body>
+
+    <div id="start-menu" class="menu-overlay">
+        <h1>靈魂之塔</h1>
+        <p style="color:#00d4ff; letter-spacing:5px;">— THE TOWER OF SOULS —</p>
+        <button class="btn" onclick="showInstructions()">踏入高塔</button>
+    </div>
+
+    <div id="instruction-screen" class="menu-overlay">
+        <h2 style="color:#d4af37; font-size:48px;">獵魂者手札</h2>
+        <div class="info-grid">
+            <div class="info-item"><b>[方向鍵]</b> 移動與跳躍</div>
+            <div class="info-item"><b>[R 鍵]</b> 魂刃揮砍 (回復靈魂)</div>
+            <div class="info-item"><b>[W 鍵]</b> 靈魂治癒 (消耗 5 靈魂)</div>
+            <div class="info-item"><b>[E 鍵]</b> 靈魂衝擊 (消耗 5 靈魂)</div>
+        </div>
+        <p style="color:#888;">靈魂上限為 10 點。挑戰遺忘皇后，取回你的宿命。</p>
+        <button class="btn" onclick="startGame()">理解契約</button>
+    </div>
+
+    <div id="game-ui">
+        <div class="player-stats">
+            <div class="hp-container" id="hp-hearts"></div>
+            <div class="soul-bar-bg"><div id="soul-fill"></div></div>
+            <div style="font-size: 13px; color: #00ffff; margin-top: 8px;">SOUL: <span id="soul-val">0</span>/10</div>
+        </div>
+        <div id="boss-container">
+            <div id="boss-name">遺忘皇后 · 塞拉菲娜</div>
+            <div class="boss-hp-bg"><div id="boss-hp-fill"></div></div>
+        </div>
+    </div>
+
+    <div id="overlay" class="menu-overlay" style="display:none; background:rgba(0,0,0,0.9);">
+        <h2 id="overlay-text" style="font-size: 60px;"></h2>
+        <button class="btn" onclick="location.reload()">重新輪迴</button>
+    </div>
+
+    <canvas id="gameCanvas"></canvas>
+
+<script>
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
+canvas.width = 1000; canvas.height = 500;
+
+let audioCtx, gameActive = false;
+let currentRoom = 0; 
+let isTransitioning = false;
+let transitionAlpha = 0;
+let bgmInterval;
+
+const world = { width: 3000, height: 500, gravity: 0.8 };
+const camera = { x: 0 };
+const keys = {};
+
+const player = { x: 100, y: 300, w: 34, h: 48, velX: 0, velY: 0, hp: 5, maxHp: 5, soul: 0, facing: 1, isAttacking: false, invincible: false };
+
+const roomData = {
+    0: {
+        width: 3000,
+        enemies: [
+            { x: 1000, y: 100, w: 40, h: 50, type: 'melee', hp: 3, maxHp: 3, velX: 0, velY: 0, dir: 1, kbTimer: 0 },
+            { x: 2000, y: 100, w: 40, h: 50, type: 'shooter', hp: 2, maxHp: 2, velX: 0, velY: 0, lastShot: 0, kbTimer: 0 }
+        ],
+        platforms: [
+            { x: 0, y: 450, w: 3000, h: 50 },
+            { x: 600, y: 320, w: 250, h: 20 },
+            { x: 1400, y: 280, w: 300, h: 20 }
+        ]
+    },
+    1: {
+        width: 1500, // 縮小 BOSS 房間
+        enemies: [],
+        platforms: [
+            { x: 0, y: 450, w: 1500, h: 50 } // 刪除牆上平台，只留地面
+        ]
+    }
+};
+
+let enemies = roomData[0].enemies;
+let platforms = roomData[0].platforms;
+let projectiles = [];
+
+// BOSS 初始座標配合縮小的房間 (房間寬 1500，BOSS 在 1200)
+const boss = { x: 1200, y: 330, w: 100, h: 120, hp: 80, maxHp: 80, phase: 1, active: false, triggered: false, timer: 0, isDead: false };
+
+function showInstructions() {
+    document.getElementById('start-menu').style.display = 'none';
+    document.getElementById('instruction-screen').style.display = 'flex';
+}
+
+function startGame() {
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    document.getElementById('instruction-screen').style.display = 'none';
+    document.getElementById('game-ui').style.display = 'block';
+    canvas.style.display = 'block';
+    gameActive = true;
+    updateUI();
+    loop();
+}
+
+// 簡易戰鬥音樂合成器
+function playBossBGM() {
+    if (bgmInterval) return;
+    let step = 0;
+    bgmInterval = setInterval(() => {
+        if (!boss.active || !gameActive) {
+            clearInterval(bgmInterval);
+            bgmInterval = null;
+            return;
+        }
+        const notes = [60, 55, 58, 53]; // 低沉循環音階
+        const freq = 440 * Math.pow(2, (notes[step % 4] - 69) / 12);
+        playSfx(freq, 'square', 0.2, 0.05); // 稍微帶點強度的方波
+        step++;
+    }, 400); 
+}
+
+window.addEventListener('keydown', e => {
+    keys[e.code] = true;
+    if (!gameActive || isTransitioning) return;
+    
+    if (e.code === 'KeyR' && !player.isAttacking) {
+        player.isAttacking = true;
+        playSfx(150, 'sawtooth', 0.1);
+        checkMelee();
+        setTimeout(() => player.isAttacking = false, 200);
+    }
+    if (e.code === 'KeyW' && player.soul >= 5 && player.hp < player.maxHp) {
+        player.soul -= 5; player.hp++; playSfx(600, 'sine', 0.5); updateUI();
+    }
+    if (e.code === 'KeyE' && player.soul >= 5) {
+        player.soul -= 5;
+        projectiles.push({ x: player.x, y: player.y + 10, w: 65, h: 25, velX: player.facing * 18, owner: 'player', power: 10 });
+        playSfx(400, 'triangle', 0.4); updateUI();
+    }
+});
+window.addEventListener('keyup', e => keys[e.code] = false);
+
+function loop() {
+    if (!gameActive) return;
+    update();
+    draw();
+    requestAnimationFrame(loop);
+}
+
+function update() {
+    if (isTransitioning) {
+        transitionAlpha += 0.02;
+        if (transitionAlpha >= 1.2) {
+            currentRoom = 1;
+            player.x = 100;
+            world.width = roomData[1].width;
+            enemies = roomData[1].enemies;
+            platforms = roomData[1].platforms;
+            isTransitioning = false;
+        }
+        return;
+    }
+    if (transitionAlpha > 0) transitionAlpha -= 0.02;
+
+    if (keys['ArrowRight']) { player.velX = 6; player.facing = 1; }
+    else if (keys['ArrowLeft']) { player.velX = -6; player.facing = -1; }
+    else { player.velX *= 0.8; }
+
+    if ((keys['Space'] || keys['ArrowUp']) && !player.jumping) {
+        player.jumping = true; player.velY = -17;
+    }
+
+    player.velY += world.gravity;
+    player.x += player.velX; player.y += player.velY;
+    handleColl(player);
+
+    if (currentRoom === 0 && player.x > 2850) {
+        isTransitioning = true;
+    }
+
+    // BOSS 觸發距離改小：當玩家靠近 BOSS 到 350px 內才觸發 (1200 - 850 = 350)
+    if (currentRoom === 1 && !boss.triggered && player.x > 850) {
+        boss.triggered = true;
+        boss.active = true;
+        document.getElementById('boss-container').style.display = 'block';
+        playBossBGM(); // 啟動戰鬥音樂
+    }
+
+    camera.x = player.x - canvas.width / 2;
+    camera.x = Math.max(0, Math.min(camera.x, world.width - canvas.width));
+
+    enemies.forEach(e => {
+        e.velY += world.gravity;
+        if (e.kbTimer > 0) { e.kbTimer--; e.velX *= 0.9; }
+        else {
+            e.velX = 0; let d = Math.abs(player.x - e.x);
+            if (e.type === 'melee' && d < 450) { e.dir = player.x > e.x ? 1 : -1; e.velX = e.dir * 3.5; }
+            if (e.type === 'shooter' && d < 650 && Date.now() - e.lastShot > 2500) {
+                projectiles.push({ x: e.x, y: e.y + 15, w: 12, h: 12, velX: (player.x > e.x ? 1 : -1) * 5, owner: 'enemy' });
+                e.lastShot = Date.now();
+            }
+        }
+        e.x += e.velX; e.y += e.velY;
+        handleColl(e);
+        if (!player.invincible && isColl(player, e)) takeDmg();
+    });
+
+    if (boss.active && !boss.isDead) {
+        boss.timer++;
+        let teleportFreq = boss.phase === 2 ? 150 : 250;
+        if (boss.timer % teleportFreq === 0) {
+            boss.x = 200 + Math.random() * (world.width - 400);
+            playSfx(100, 'sine', 0.2, 0.1); // 瞬移音效
+        }
+        if (boss.phase === 2 && boss.timer % 120 === 0) {
+            for(let i=-1; i<=1; i++) projectiles.push({ x: boss.x, y: boss.y + 50, w: 18, h: 18, velX: -8, velY: i*2, owner: 'enemy' });
+        }
+        if (!player.invincible && isColl(player, boss)) takeDmg();
+    }
+
+    projectiles.forEach((p, i) => {
+        p.x += p.velX; p.y += (p.velY || 0);
+        if (p.owner === 'player') {
+            enemies.forEach(e => { if (isColl(p, e)) { e.hp -= p.power; projectiles.splice(i, 1); }});
+            if (boss.active && isColl(p, boss)) { boss.hp -= p.power; updateUI(); projectiles.splice(i, 1); }
+        } else {
+            if (!player.invincible && isColl(p, player)) { takeDmg(); projectiles.splice(i, 1); }
+        }
+        if (p.x < 0 || p.x > world.width) projectiles.splice(i, 1);
+    });
+
+    enemies = enemies.filter(e => e.hp > 0);
+    if (boss.hp <= 0 && boss.active) {
+        boss.isDead = true; boss.active = false;
+        document.getElementById('boss-container').style.display = 'none';
+        endGame("遺忘皇后已成塵埃", "#bf40bf");
+    }
+}
+
+function handleColl(obj) {
+    obj.x = Math.max(0, Math.min(obj.x, world.width - obj.w));
+    let grounded = false;
+    platforms.forEach(p => {
+        if (obj.x < p.x + p.w && obj.x + obj.w > p.x && obj.y + obj.h > p.y && obj.y < p.y + p.h) {
+            if (obj.velY > 0) { obj.y = p.y - obj.h; obj.velY = 0; grounded = true; }
+        }
+    });
+    if (obj === player) player.jumping = !grounded;
+}
+
+function checkMelee() {
+    const hb = { x: player.facing === 1 ? player.x + player.w : player.x - 60, y: player.y, w: 60, h: player.h };
+    enemies.forEach(e => {
+        if (isColl(hb, e)) { e.hp--; e.velX = player.facing * 12; e.kbTimer = 15; player.soul = Math.min(10, player.soul + 1); updateUI(); }
+    });
+    if (boss.active && isColl(hb, boss)) { 
+        boss.hp--; player.soul = Math.min(10, player.soul + 1); updateUI(); 
+    }
+}
+
+function takeDmg() {
+    player.hp--; player.invincible = true; updateUI();
+    playSfx(120, 'sawtooth', 0.2, 0.3);
+    if (player.hp <= 0) endGame("靈魂支離破碎", "#ff4d4d");
+    setTimeout(() => player.invincible = false, 1200);
+}
+
+function updateUI() {
+    const container = document.getElementById('hp-hearts');
+    container.innerHTML = '';
+    for(let i=0; i<player.maxHp; i++) {
+        const h = document.createElement('div'); h.className = i < player.hp ? 'hp-unit' : 'hp-unit lost';
+        container.appendChild(h);
+    }
+    document.getElementById('soul-fill').style.width = (player.soul * 10) + '%';
+    document.getElementById('soul-val').innerText = player.soul;
+    document.getElementById('boss-hp-fill').style.width = (boss.hp / boss.maxHp * 100) + '%';
+    if(boss.hp <= boss.maxHp/2) boss.phase = 2;
+}
+
+function playSfx(f, t, d, vol = 0.1) {
+    if(!audioCtx) return;
+    const o = audioCtx.createOscillator(); const g = audioCtx.createGain();
+    o.type = t; o.frequency.setValueAtTime(f, audioCtx.currentTime);
+    g.gain.setValueAtTime(vol, audioCtx.currentTime); g.gain.linearRampToValueAtTime(0, audioCtx.currentTime + d);
+    o.connect(g); g.connect(audioCtx.destination); o.start(); o.stop(audioCtx.currentTime + d);
+}
+
+function isColl(a, b) { return a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y; }
+
+function endGame(t, c) {
+    gameActive = false; document.getElementById('overlay-text').innerText = t;
+    document.getElementById('overlay-text').style.color = c;
+    document.getElementById('overlay').style.display = 'flex';
+}
+
+function draw() {
+    ctx.fillStyle = (currentRoom === 0) ? '#0a0a0f' : '#000810';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    
+    ctx.save(); ctx.translate(-camera.x * 0.2, 0);
+    ctx.strokeStyle = (currentRoom === 0) ? '#1a1a25' : '#002244';
+    for(let i=0; i<world.width; i+=100) for(let j=0; j<500; j+=50) ctx.strokeRect(i+(j%100===0?0:50), j, 100, 50);
+    ctx.restore();
+
+    ctx.save(); ctx.translate(-camera.x, 0);
+
+    if (currentRoom === 0) {
+        ctx.strokeStyle = '#d4af37'; ctx.lineWidth = 5; ctx.strokeRect(2900, 150, 80, 300);
+        ctx.fillStyle = 'rgba(212,175,55,0.2)'; ctx.fillRect(2900, 150, 80, 300);
+    }
+
+    platforms.forEach(p => {
+        ctx.fillStyle = (currentRoom === 0) ? '#222' : '#001a33';
+        ctx.fillRect(p.x, p.y, p.w, p.h);
+        ctx.fillStyle = (currentRoom === 0) ? '#d4af37' : '#00ffff';
+        ctx.fillRect(p.x, p.y, p.w, 3);
+    });
+
+    enemies.forEach(e => {
+        ctx.fillStyle = (e.type === 'melee' ? '#500' : '#550');
+        ctx.fillRect(e.x, e.y, e.w, e.h);
+    });
+
+    if (boss.active && !boss.isDead) {
+        ctx.fillStyle = '#bf40bf';
+        ctx.shadowBlur = boss.phase === 2 ? 40 : 20; ctx.shadowColor = '#bf40bf';
+        ctx.fillRect(boss.x, boss.y, boss.w, boss.h);
+        ctx.fillStyle = '#ffd700'; ctx.fillRect(boss.x + 20, boss.y - 15, 60, 15);
+        ctx.shadowBlur = 0;
+    }
+
+    if (!player.invincible || Math.floor(Date.now() / 100) % 2) {
+        ctx.fillStyle = '#00d4ff'; ctx.fillRect(player.x, player.y, player.w, player.h);
+        ctx.fillStyle = '#fff'; let ex = player.facing === 1 ? player.x + 18 : player.x + 6;
+        ctx.fillRect(ex, player.y + 12, 10, 8);
+    }
+
+    if (player.isAttacking) {
+        ctx.fillStyle = 'rgba(255,255,255,0.4)';
+        ctx.fillRect(player.facing === 1 ? player.x + player.w : player.x - 60, player.y + 5, 60, 35);
+    }
+
+    projectiles.forEach(p => {
+        ctx.fillStyle = p.owner === 'player' ? '#0ff' : '#bf40bf';
+        ctx.shadowBlur = 10; ctx.shadowColor = ctx.fillStyle;
+        ctx.fillRect(p.x, p.y, p.w, p.h);
+        ctx.shadowBlur = 0;
+    });
+
+    ctx.restore();
+
+    if (transitionAlpha > 0) {
+        ctx.fillStyle = `rgba(255, 255, 255, ${Math.min(1, transitionAlpha)})`;
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+    }
+}
+</script>
+</body>
+</html>
