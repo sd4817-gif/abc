@@ -30,20 +30,61 @@
         #boss-name { font-size: 24px; color: #bf40bf; margin-bottom: 8px; letter-spacing: 10px; text-shadow: 0 0 15px #bf40bf; }
         .boss-hp-bg { width: 100%; height: 8px; background: rgba(0,0,0,0.8); border: 1px solid #bf40bf; }
         #boss-hp-fill { height: 100%; background: linear-gradient(90deg, #4b0082, #bf40bf); width: 100%; transition: width 0.2s; box-shadow: 0 0 15px #bf40bf; }
+
+        .bottom-guide { position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%); font-size: 14px; color: rgba(212, 175, 55, 0.6); letter-spacing: 2px; text-align: center; pointer-events: none; }
+        .bottom-guide b { color: #00d4ff; margin: 0 5px; }
+
+        /* 新增：全球次數顯示樣式 */
+        #global-stats { color: #888; margin-top: 15px; font-size: 16px; letter-spacing: 2px; }
+        #global-count-val { color: #ffd700; font-weight: bold; text-shadow: 0 0 10px rgba(255,215,0,0.3); }
     </style>
 </head>
 <body>
 
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
+        import { getDatabase, ref, runTransaction, onValue } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-database.js";
+
+        const firebaseConfig = {
+            apiKey: "AIzaSyD6480dGkHUoNi5MKgqdOh-p5-kanGA4Pk",
+            authDomain: "tos-54b2a.firebaseapp.com",
+            projectId: "tos-54b2a",
+            storageBucket: "tos-54b2a.firebasestorage.app",
+            messagingSenderId: "950291263701",
+            appId: "1:950291263701:web:ec18dd087a2fc6bdaab25c",
+            measurementId: "G-CDDT3CVTF8"
+        };
+
+        const app = initializeApp(firebaseConfig);
+        const db = getDatabase(app);
+        const playCountRef = ref(db, 'stats/globalPlayCount');
+
+        // 監聽並即時更新頁面上的次數
+        onValue(playCountRef, (snapshot) => {
+            const count = snapshot.val() || 0;
+            const display = document.getElementById('global-count-val');
+            if (display) display.innerText = count.toLocaleString();
+        });
+
+        // 導出全域函式供遊戲邏輯呼叫
+        window.incrementGlobalPlayCount = function() {
+            runTransaction(playCountRef, (currentValue) => {
+                return (currentValue || 0) + 1;
+            });
+        };
+    </script>
+
     <div id="start-menu" class="menu-overlay">
         <h1>靈魂之塔</h1>
         <p style="color:#00d4ff; letter-spacing:5px;">— THE TOWER OF SOULS —</p>
+        <div id="global-stats">全球已探索次數：<span id="global-count-val">...</span></div>
         <button class="btn" onclick="showInstructions()">踏入高塔</button>
     </div>
 
     <div id="instruction-screen" class="menu-overlay">
         <h2 style="color:#d4af37; font-size:48px;">獵魂者手札</h2>
         <div class="info-grid">
-            <div class="info-item"><b>[方向鍵]</b> 移動與跳躍</div>
+            <div class="info-item"><b>[方向鍵]</b> 移動與跳躍 (支援二段跳)</div>
             <div class="info-item"><b>[R 鍵]</b> 魂刃揮砍 (回復靈魂)</div>
             <div class="info-item"><b>[W 鍵]</b> 靈魂治癒 (消耗 5 靈魂)</div>
             <div class="info-item"><b>[E 鍵]</b> 靈魂衝擊 (消耗 5 靈魂)</div>
@@ -57,6 +98,7 @@
             <div class="hp-container" id="hp-hearts"></div>
             <div class="soul-bar-bg"><div id="soul-fill"></div></div>
             <div style="font-size: 13px; color: #00ffff; margin-top: 8px;">SOUL: <span id="soul-val">0</span>/10</div>
+            <div style="font-size: 16px; color: #ffd700; margin-top: 5px; text-shadow: 0 0 5px #ffd700;">SCORE: <span id="score-val">0</span></div>
         </div>
         <div id="boss-container">
             <div id="boss-name">遺忘皇后 · 塞拉菲娜</div>
@@ -66,7 +108,12 @@
 
     <div id="overlay" class="menu-overlay" style="display:none; background:rgba(0,0,0,0.9);">
         <h2 id="overlay-text" style="font-size: 60px;"></h2>
+        <p id="score-summary" style="font-size: 24px; color: #ffd700; margin-bottom: 20px;"></p>
         <button class="btn" onclick="location.reload()">重新輪迴</button>
+    </div>
+
+    <div id="footer-guide" class="bottom-guide" style="display:none;">
+        [方向鍵] 移動與跳躍 | [R] 攻擊 | [W] 治癒 | [E] 衝擊
     </div>
 
     <canvas id="gameCanvas"></canvas>
@@ -87,7 +134,12 @@ const world = { width: 3000, height: 500, gravity: 0.8 };
 const camera = { x: 0 };
 const keys = {};
 
-const player = { x: 100, y: 300, w: 34, h: 48, velX: 0, velY: 0, hp: 5, maxHp: 5, soul: 0, facing: 1, isAttacking: false, invincible: false };
+const player = { 
+    x: 100, y: 300, w: 34, h: 48, velX: 0, velY: 0, 
+    hp: 5, maxHp: 5, soul: 0, facing: 1, 
+    isAttacking: false, invincible: false, score: 0,
+    jumps: 0, canJump: true // 二段跳邏輯變數
+};
 
 const roomData = {
     0: {
@@ -114,12 +166,23 @@ const roomData = {
 let enemies = roomData[0].enemies;
 let platforms = roomData[0].platforms;
 let projectiles = [];
-let particles = []; // 新增：用於存放皇后的房間內的發光小球
+let particles = []; 
+let goldOrbs = []; 
 
 const boss = { x: 1200, y: 330, w: 100, h: 120, hp: 80, maxHp: 80, phase: 1, active: false, triggered: false, timer: 0, isDead: false };
-
-// 新增皇冠物件
 const crownItem = { x: 0, y: 0, w: 40, h: 30, active: false };
+
+function spawnGoldOrbs(width) {
+    goldOrbs = [];
+    for(let i=0; i<15; i++) {
+        goldOrbs.push({
+            x: 400 + Math.random() * (width - 800),
+            y: 150 + Math.random() * 200,
+            w: 12, h: 12,
+            collected: false
+        });
+    }
+}
 
 function showInstructions() {
     document.getElementById('start-menu').style.display = 'none';
@@ -127,11 +190,18 @@ function showInstructions() {
 }
 
 function startGame() {
+    // 整合：啟動遊戲時增加 Firebase 全球次數
+    if (typeof window.incrementGlobalPlayCount === 'function') {
+        window.incrementGlobalPlayCount();
+    }
+
     audioCtx = new (window.AudioContext || window.webkitAudioContext)();
     document.getElementById('instruction-screen').style.display = 'none';
     document.getElementById('game-ui').style.display = 'block';
+    document.getElementById('footer-guide').style.display = 'block'; 
     canvas.style.display = 'block';
     gameActive = true;
+    spawnGoldOrbs(roomData[0].width); 
     updateUI();
     playBGM('exploration');
     loop();
@@ -194,17 +264,13 @@ function update() {
             world.width = roomData[1].width;
             enemies = roomData[1].enemies;
             platforms = roomData[1].platforms;
+            spawnGoldOrbs(world.width); 
             isTransitioning = false;
-            
-            // 新增：初始化皇后的房間發光小球
             for (let i = 0; i < 60; i++) {
                 particles.push({
-                    x: Math.random() * world.width,
-                    y: Math.random() * world.height,
-                    r: Math.random() * 2.5 + 1, // 半徑大小
-                    vy: -(Math.random() * 0.5 + 0.2), // 往上漂浮的速度
-                    vx: Math.random() * 0.4 - 0.2, // 微微左右飄移
-                    alpha: Math.random() * 0.6 + 0.2 // 透明度
+                    x: Math.random() * world.width, y: Math.random() * world.height,
+                    r: Math.random() * 2.5 + 1, vy: -(Math.random() * 0.5 + 0.2),
+                    vx: Math.random() * 0.4 - 0.2, alpha: Math.random() * 0.6 + 0.2
                 });
             }
         }
@@ -216,32 +282,42 @@ function update() {
     else if (keys['ArrowLeft']) { player.velX = -6; player.facing = -1; }
     else { player.velX *= 0.8; }
 
-    if ((keys['Space'] || keys['ArrowUp']) && !player.jumping) {
-        player.jumping = true; player.velY = -17;
+    // 整合：二段跳邏輯
+    if ((keys['Space'] || keys['ArrowUp'])) {
+        if (player.canJump && player.jumps < 2) {
+            player.velY = -17;
+            player.jumps++;
+            player.jumping = true;
+            player.canJump = false;
+            playSfx(250 + (player.jumps * 50), 'sine', 0.1, 0.05);
+        }
+    } else {
+        player.canJump = true; 
     }
 
     player.velY += world.gravity;
     player.x += player.velX; player.y += player.velY;
     handleColl(player);
 
-    if (currentRoom === 0 && player.x > 2850) isTransitioning = true;
+    goldOrbs.forEach(orb => {
+        if (!orb.collected && isColl(player, orb)) {
+            orb.collected = true;
+            player.score += 100;
+            playSfx(1200, 'sine', 0.1, 0.05);
+            updateUI();
+        }
+    });
 
-    // 新增：更新 Boss 房間裡的小球狀態
+    if (currentRoom === 0 && player.x > 2850) isTransitioning = true;
     if (currentRoom === 1) {
         if (!boss.triggered && player.x > 850) {
             boss.triggered = true; boss.active = true;
             document.getElementById('boss-container').style.display = 'block';
             playBGM('boss');
         }
-        
         particles.forEach(p => {
-            p.x += p.vx;
-            p.y += p.vy;
-            // 如果小球漂到畫面上方，讓它從最底下重新出現
-            if (p.y < -10) {
-                p.y = world.height + 10;
-                p.x = Math.random() * world.width;
-            }
+            p.x += p.vx; p.y += p.vy;
+            if (p.y < -10) { p.y = world.height + 10; p.x = Math.random() * world.width; }
         });
     }
 
@@ -289,23 +365,17 @@ function update() {
     });
 
     enemies = enemies.filter(e => e.hp > 0);
-    
-    // Boss 死亡後的掉落邏輯
     if (boss.hp <= 0 && boss.active) {
-        boss.isDead = true; 
-        boss.active = false;
+        boss.isDead = true; boss.active = false;
         document.getElementById('boss-container').style.display = 'none';
-        
-        // 在 Boss 位置掉落皇冠
         crownItem.x = boss.x + boss.w/2 - crownItem.w/2;
-        crownItem.y = 450 - crownItem.h; // 掉落在地板上
+        crownItem.y = 450 - crownItem.h;
         crownItem.active = true;
-        playSfx(800, 'sine', 0.5, 0.2); // 勝利前的音效
+        playSfx(800, 'sine', 0.5, 0.2);
     }
-
-    // 皇冠撿取邏輯
     if (crownItem.active && isColl(player, crownItem)) {
         crownItem.active = false;
+        player.score += 5000; 
         endGame("奪回宿命之冠", "#ffd700");
     }
 }
@@ -318,7 +388,14 @@ function handleColl(obj) {
             if (obj.velY > 0) { obj.y = p.y - obj.h; obj.velY = 0; grounded = true; }
         }
     });
-    if (obj === player) player.jumping = !grounded;
+    // 整合：二段跳落地重置
+    if (obj === player) {
+        player.jumping = !grounded;
+        if (grounded) {
+            player.jumps = 0;
+            player.canJump = true;
+        }
+    }
 }
 
 function checkMelee() {
@@ -345,6 +422,7 @@ function updateUI() {
     }
     document.getElementById('soul-fill').style.width = (player.soul * 10) + '%';
     document.getElementById('soul-val').innerText = player.soul;
+    document.getElementById('score-val').innerText = player.score; 
     document.getElementById('boss-hp-fill').style.width = (boss.hp / boss.maxHp * 100) + '%';
     if(boss.hp <= boss.maxHp/2) boss.phase = 2;
 }
@@ -359,28 +437,24 @@ function playSfx(f, t, d, vol = 0.1) {
 
 function isColl(a, b) { return a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y; }
 
-let endingBgmInterval; // 新增：用來控制結束音樂的循環
-
+let endingBgmInterval;
 function endGame(t, c) {
     gameActive = false; 
     if (bgmInterval) clearInterval(bgmInterval);
-    if (endingBgmInterval) clearInterval(endingBgmInterval); // 確保乾淨
-
+    if (endingBgmInterval) clearInterval(endingBgmInterval);
     document.getElementById('overlay-text').innerText = t;
     document.getElementById('overlay-text').style.color = c;
+    const scoreSummary = document.getElementById('score-summary');
+    scoreSummary.innerText = (t === "奪回宿命之冠" ? "最終分數：" : "收集分數：") + player.score;
     document.getElementById('overlay').style.display = 'flex';
-
-    // --- 結束音樂循環邏輯 ---
+    document.getElementById('footer-guide').style.display = 'none';
     const isVictory = t === "奪回宿命之冠";
-    const notes = isVictory ? [64, 67, 72, 71] : [48, 44, 43, 41]; // 勝利：清脆上行；失敗：沉重下行
+    const notes = isVictory ? [64, 67, 72, 71] : [48, 44, 43, 41];
     const waveType = isVictory ? 'sine' : 'sawtooth';
     let step = 0;
-
-    // 設定循環
     endingBgmInterval = setInterval(() => {
         const freq = 440 * Math.pow(2, (notes[step % notes.length] - 69) / 12);
-        playSfx(freq, waveType, 0.5, 0.15);
-        step++;
+        playSfx(freq, waveType, 0.5, 0.15); step++;
     }, 600); 
 }
 
@@ -388,56 +462,45 @@ function draw() {
     const time = Date.now() / 1000;
     ctx.fillStyle = (currentRoom === 0) ? '#0a0a0f' : '#000810';
     ctx.fillRect(0, 0, canvas.width, canvas.height);
-    
     ctx.save(); ctx.translate(-camera.x * 0.2, 0);
     ctx.strokeStyle = (currentRoom === 0) ? '#1a1a25' : '#002244';
     for(let i=0; i<world.width; i+=100) for(let j=0; j<500; j+=50) ctx.strokeRect(i+(j%100===0?0:50), j, 100, 50);
     ctx.restore();
-
     ctx.save(); ctx.translate(-camera.x, 0);
 
     if (currentRoom === 0) {
-        ctx.strokeStyle = '#d4af37'; ctx.lineWidth = 5; 
-        ctx.shadowBlur = 20; ctx.shadowColor = '#d4af37';
-        ctx.strokeRect(2900, 150, 80, 300);
-        ctx.fillStyle = `rgba(212,175,55,${0.1 + Math.sin(time*3)*0.1})`; 
-        ctx.fillRect(2900, 150, 80, 300);
-        ctx.shadowBlur = 0;
+        ctx.strokeStyle = '#d4af37'; ctx.lineWidth = 5; ctx.shadowBlur = 20; ctx.shadowColor = '#d4af37';
+        ctx.strokeRect(2900, 150, 80, 300); ctx.fillStyle = `rgba(212,175,55,${0.1 + Math.sin(time*3)*0.1})`; 
+        ctx.fillRect(2900, 150, 80, 300); ctx.shadowBlur = 0;
     }
-
-    // 新增：當在 Boss 的房間時，畫出飄浮的發光小球
     if (currentRoom === 1) {
         ctx.save();
         particles.forEach(p => {
-            ctx.beginPath();
-            ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
-            // 配合 Boss 的紫色風格
-            ctx.fillStyle = `rgba(191, 64, 191, ${p.alpha})`; 
-            ctx.shadowBlur = 10;
-            ctx.shadowColor = '#bf40bf';
+            ctx.beginPath(); ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
+            ctx.fillStyle = `rgba(191, 64, 191, ${p.alpha})`; ctx.shadowBlur = 10; ctx.shadowColor = '#bf40bf';
             ctx.fill();
         });
         ctx.restore();
     }
-
+    goldOrbs.forEach(orb => {
+        if (!orb.collected) {
+            ctx.save(); let orbFloat = Math.sin(time * 6) * 4;
+            ctx.fillStyle = '#ffd700'; ctx.shadowBlur = 15; ctx.shadowColor = '#ffd700';
+            ctx.beginPath(); ctx.arc(orb.x + 6, orb.y + 6 + orbFloat, 6, 0, Math.PI * 2); ctx.fill(); ctx.restore();
+        }
+    });
     platforms.forEach(p => {
         let grad = ctx.createLinearGradient(p.x, p.y, p.x, p.y + p.h);
-        grad.addColorStop(0, currentRoom === 0 ? '#333' : '#002b4d');
-        grad.addColorStop(1, '#111');
-        ctx.fillStyle = grad;
-        ctx.fillRect(p.x, p.y, p.w, p.h);
-        ctx.fillStyle = (currentRoom === 0) ? '#d4af37' : '#00ffff';
-        ctx.fillRect(p.x, p.y, p.w, 3);
+        grad.addColorStop(0, currentRoom === 0 ? '#333' : '#002b4d'); grad.addColorStop(1, '#111');
+        ctx.fillStyle = grad; ctx.fillRect(p.x, p.y, p.w, p.h);
+        ctx.fillStyle = (currentRoom === 0) ? '#d4af37' : '#00ffff'; ctx.fillRect(p.x, p.y, p.w, 3);
     });
-
     enemies.forEach(e => {
-        ctx.save();
-        ctx.shadowBlur = 15;
+        ctx.save(); ctx.shadowBlur = 15;
         if (e.type === 'melee') {
             let grad = ctx.createLinearGradient(e.x, e.y, e.x + e.w, e.y + e.h);
             grad.addColorStop(0, '#800'); grad.addColorStop(1, '#200');
-            ctx.fillStyle = grad; ctx.shadowColor = '#f00';
-            ctx.fillRect(e.x, e.y, e.w, e.h);
+            ctx.fillStyle = grad; ctx.shadowColor = '#f00'; ctx.fillRect(e.x, e.y, e.w, e.h);
             ctx.fillStyle = '#ff4d4d'; ctx.fillRect(e.dir === 1 ? e.x+25 : e.x+5, e.y+10, 10, 4);
         } else {
             let floating = Math.sin(time * 4) * 5;
@@ -448,84 +511,48 @@ function draw() {
         }
         ctx.restore();
     });
-
     if (boss.active && !boss.isDead) {
-        ctx.save();
-        let bossFloat = Math.sin(time * 2) * 15;
-        ctx.translate(boss.x, boss.y + bossFloat);
+        ctx.save(); let bossFloat = Math.sin(time * 2) * 15; ctx.translate(boss.x, boss.y + bossFloat);
         let bossGrad = ctx.createLinearGradient(0, 0, 0, boss.h);
         bossGrad.addColorStop(0, '#bf40bf'); bossGrad.addColorStop(1, 'transparent');
-        ctx.fillStyle = bossGrad;
-        ctx.shadowBlur = boss.phase === 2 ? 50 : 25; ctx.shadowColor = '#bf40bf';
-        ctx.beginPath();
-        ctx.moveTo(0, 30); ctx.lineTo(boss.w, 30); ctx.lineTo(boss.w + 20, boss.h); ctx.lineTo(-20, boss.h);
-        ctx.closePath(); ctx.fill();
-        ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(boss.w/2, 40, 15, 0, Math.PI*2); ctx.fill();
-        ctx.fillStyle = '#ffd700'; ctx.shadowColor = '#ffd700';
-        ctx.fillRect(15, -10, 70, 15);
-        for(let i=0; i<3; i++) {
-            ctx.beginPath(); ctx.moveTo(20+i*25, -10); ctx.lineTo(35+i*25, -30); ctx.lineTo(50+i*25, -10); ctx.fill();
-        }
+        ctx.fillStyle = bossGrad; ctx.shadowBlur = boss.phase === 2 ? 50 : 25; ctx.shadowColor = '#bf40bf';
+        ctx.beginPath(); ctx.moveTo(0, 30); ctx.lineTo(boss.w, 30); ctx.lineTo(boss.w + 20, boss.h); ctx.lineTo(-20, boss.h);
+        ctx.closePath(); ctx.fill(); ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(boss.w/2, 40, 15, 0, Math.PI*2); ctx.fill();
+        ctx.fillStyle = '#ffd700'; ctx.shadowColor = '#ffd700'; ctx.fillRect(15, -10, 70, 15);
+        for(let i=0; i<3; i++) { ctx.beginPath(); ctx.moveTo(20+i*25, -10); ctx.lineTo(35+i*25, -30); ctx.lineTo(50+i*25, -10); ctx.fill(); }
         ctx.restore();
     }
-
-    // 繪製掉落的皇冠
     if (crownItem.active) {
-        ctx.save();
-        let crownFloat = Math.sin(time * 5) * 8;
-        ctx.translate(crownItem.x, crownItem.y + crownFloat);
-        ctx.fillStyle = '#ffd700';
-        ctx.shadowBlur = 25;
-        ctx.shadowColor = '#ffd700';
-        // 皇冠底座
+        ctx.save(); let crownFloat = Math.sin(time * 5) * 8; ctx.translate(crownItem.x, crownItem.y + crownFloat);
+        ctx.fillStyle = '#ffd700'; ctx.shadowBlur = 25; ctx.shadowColor = '#ffd700';
         ctx.fillRect(0, 15, crownItem.w, 10);
-        // 皇冠尖端
-        for(let i=0; i<3; i++) {
-            ctx.beginPath();
-            ctx.moveTo(5 + i*15, 15);
-            ctx.lineTo(10 + i*15, 0);
-            ctx.lineTo(15 + i*15, 15);
-            ctx.fill();
-        }
+        for(let i=0; i<3; i++) { ctx.beginPath(); ctx.moveTo(5 + i*15, 15); ctx.lineTo(10 + i*15, 0); ctx.lineTo(15 + i*15, 15); ctx.fill(); }
         ctx.restore();
     }
-
     if (!player.invincible || Math.floor(Date.now() / 100) % 2) {
-        ctx.save();
-        let pGrad = ctx.createLinearGradient(player.x, player.y, player.x, player.y + player.h);
+        ctx.save(); let pGrad = ctx.createLinearGradient(player.x, player.y, player.x, player.y + player.h);
         pGrad.addColorStop(0, '#00d4ff'); pGrad.addColorStop(1, '#005580');
-        ctx.fillStyle = pGrad;
-        ctx.shadowBlur = 15; ctx.shadowColor = '#00d4ff';
-        ctx.fillRect(player.x, player.y, player.w, player.h);
-        ctx.fillStyle = '#fff';
+        ctx.fillStyle = pGrad; ctx.shadowBlur = 15; ctx.shadowColor = '#00d4ff';
+        ctx.fillRect(player.x, player.y, player.w, player.h); ctx.fillStyle = '#fff';
         let coreSize = 6 + Math.sin(time*5) * 2;
         ctx.beginPath(); ctx.arc(player.x + player.w/2, player.y + 15, coreSize, 0, Math.PI*2); ctx.fill();
-        ctx.strokeStyle = 'rgba(0, 212, 255, 0.5)'; ctx.lineWidth = 4;
-        ctx.beginPath();
+        ctx.strokeStyle = 'rgba(0, 212, 255, 0.5)'; ctx.lineWidth = 4; ctx.beginPath();
         ctx.moveTo(player.x + (player.facing === 1 ? 0 : player.w), player.y + 15);
         ctx.bezierCurveTo(player.x - 20 * player.facing, player.y + 10, player.x - 30 * player.facing, player.y + 40, player.x - 40 * player.facing, player.y + 30);
-        ctx.stroke();
-        ctx.restore();
+        ctx.stroke(); ctx.restore();
     }
-
     if (player.isAttacking) {
-        ctx.save();
-        let atkGrad = ctx.createLinearGradient(player.x, player.y, player.x + 80*player.facing, player.y);
+        ctx.save(); let atkGrad = ctx.createLinearGradient(player.x, player.y, player.x + 80*player.facing, player.y);
         atkGrad.addColorStop(0, 'rgba(255,255,255,0.8)'); atkGrad.addColorStop(1, 'transparent');
-        ctx.fillStyle = atkGrad;
-        ctx.shadowBlur = 20; ctx.shadowColor = '#fff';
+        ctx.fillStyle = atkGrad; ctx.shadowBlur = 20; ctx.shadowColor = '#fff';
         let slashX = player.facing === 1 ? player.x + player.w : player.x - 70;
-        ctx.beginPath();
-        ctx.ellipse(slashX + 35, player.y + 25, 45, 25, 0, 0, Math.PI*2); ctx.fill();
-        ctx.restore();
+        ctx.beginPath(); ctx.ellipse(slashX + 35, player.y + 25, 45, 25, 0, 0, Math.PI*2); ctx.fill(); ctx.restore();
     }
-
     projectiles.forEach(p => {
         ctx.save();
         if (p.owner === 'player') {
             ctx.fillStyle = '#0ff'; ctx.shadowBlur = 15; ctx.shadowColor = '#0ff';
-            ctx.beginPath();
-            ctx.moveTo(p.x, p.y + p.h/2); ctx.lineTo(p.x + p.w/2, p.y);
+            ctx.beginPath(); ctx.moveTo(p.x, p.y + p.h/2); ctx.lineTo(p.x + p.w/2, p.y);
             ctx.lineTo(p.x + p.w, p.y + p.h/2); ctx.lineTo(p.x + p.w/2, p.y + p.h);
             ctx.closePath(); ctx.fill();
         } else {
@@ -535,9 +562,7 @@ function draw() {
         }
         ctx.restore();
     });
-
     ctx.restore();
-
     if (transitionAlpha > 0) {
         ctx.fillStyle = `rgba(255, 255, 255, ${Math.min(1, transitionAlpha)})`;
         ctx.fillRect(0, 0, canvas.width, canvas.height);
