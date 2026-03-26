@@ -48,7 +48,7 @@
             <div class="info-item"><b>[W 鍵]</b> 靈魂治癒 (消耗 5 靈魂)</div>
             <div class="info-item"><b>[E 鍵]</b> 靈魂衝擊 (消耗 5 靈魂)</div>
         </div>
-        <p style="color:#888;">靈魂上限為 10 點。挑戰遺忘皇后，取回你的宿命。</p>
+        <p style="color:#888;">擊敗遺忘皇后並奪回皇冠，取回你的宿命。</p>
         <button class="btn" onclick="startGame()">理解契約</button>
     </div>
 
@@ -81,6 +81,7 @@ let currentRoom = 0;
 let isTransitioning = false;
 let transitionAlpha = 0;
 let bgmInterval;
+let currentBgmMode = null;
 
 const world = { width: 3000, height: 500, gravity: 0.8 };
 const camera = { x: 0 };
@@ -102,10 +103,10 @@ const roomData = {
         ]
     },
     1: {
-        width: 1500, // 縮小 BOSS 房間
+        width: 1500, 
         enemies: [],
         platforms: [
-            { x: 0, y: 450, w: 1500, h: 50 } // 刪除牆上平台，只留地面
+            { x: 0, y: 450, w: 1500, h: 50 }
         ]
     }
 };
@@ -113,9 +114,12 @@ const roomData = {
 let enemies = roomData[0].enemies;
 let platforms = roomData[0].platforms;
 let projectiles = [];
+let particles = []; // 新增：用於存放皇后的房間內的發光小球
 
-// BOSS 初始座標配合縮小的房間 (房間寬 1500，BOSS 在 1200)
 const boss = { x: 1200, y: 330, w: 100, h: 120, hp: 80, maxHp: 80, phase: 1, active: false, triggered: false, timer: 0, isDead: false };
+
+// 新增皇冠物件
+const crownItem = { x: 0, y: 0, w: 40, h: 30, active: false };
 
 function showInstructions() {
     document.getElementById('start-menu').style.display = 'none';
@@ -129,30 +133,34 @@ function startGame() {
     canvas.style.display = 'block';
     gameActive = true;
     updateUI();
+    playBGM('exploration');
     loop();
 }
 
-// 簡易戰鬥音樂合成器
-function playBossBGM() {
-    if (bgmInterval) return;
+function playBGM(mode) {
+    if (currentBgmMode === mode) return;
+    if (bgmInterval) clearInterval(bgmInterval);
+    currentBgmMode = mode;
     let step = 0;
     bgmInterval = setInterval(() => {
-        if (!boss.active || !gameActive) {
-            clearInterval(bgmInterval);
-            bgmInterval = null;
-            return;
+        if (!gameActive) { clearInterval(bgmInterval); return; }
+        if (mode === 'exploration') {
+            const notes = [48, 43, 44, 41]; 
+            const freq = 440 * Math.pow(2, (notes[step % 4] - 69) / 12);
+            playSfx(freq, 'triangle', 0.8, 0.04); 
+            step++;
+        } else if (mode === 'boss') {
+            const notes = [60, 55, 58, 53, 61, 56, 59, 54]; 
+            const freq = 440 * Math.pow(2, (notes[step % 8] - 69) / 12);
+            playSfx(freq, 'square', 0.3, 0.06); 
+            step++;
         }
-        const notes = [60, 55, 58, 53]; // 低沉循環音階
-        const freq = 440 * Math.pow(2, (notes[step % 4] - 69) / 12);
-        playSfx(freq, 'square', 0.2, 0.05); // 稍微帶點強度的方波
-        step++;
-    }, 400); 
+    }, mode === 'exploration' ? 800 : 400);
 }
 
 window.addEventListener('keydown', e => {
     keys[e.code] = true;
     if (!gameActive || isTransitioning) return;
-    
     if (e.code === 'KeyR' && !player.isAttacking) {
         player.isAttacking = true;
         playSfx(150, 'sawtooth', 0.1);
@@ -164,7 +172,7 @@ window.addEventListener('keydown', e => {
     }
     if (e.code === 'KeyE' && player.soul >= 5) {
         player.soul -= 5;
-        projectiles.push({ x: player.x, y: player.y + 10, w: 65, h: 25, velX: player.facing * 18, owner: 'player', power: 10 });
+        projectiles.push({ x: player.x, y: player.y + 10, w: 40, h: 20, velX: player.facing * 18, owner: 'player', power: 10 });
         playSfx(400, 'triangle', 0.4); updateUI();
     }
 });
@@ -187,6 +195,18 @@ function update() {
             enemies = roomData[1].enemies;
             platforms = roomData[1].platforms;
             isTransitioning = false;
+            
+            // 新增：初始化皇后的房間發光小球
+            for (let i = 0; i < 60; i++) {
+                particles.push({
+                    x: Math.random() * world.width,
+                    y: Math.random() * world.height,
+                    r: Math.random() * 2.5 + 1, // 半徑大小
+                    vy: -(Math.random() * 0.5 + 0.2), // 往上漂浮的速度
+                    vx: Math.random() * 0.4 - 0.2, // 微微左右飄移
+                    alpha: Math.random() * 0.6 + 0.2 // 透明度
+                });
+            }
         }
         return;
     }
@@ -204,16 +224,25 @@ function update() {
     player.x += player.velX; player.y += player.velY;
     handleColl(player);
 
-    if (currentRoom === 0 && player.x > 2850) {
-        isTransitioning = true;
-    }
+    if (currentRoom === 0 && player.x > 2850) isTransitioning = true;
 
-    // BOSS 觸發距離改小：當玩家靠近 BOSS 到 350px 內才觸發 (1200 - 850 = 350)
-    if (currentRoom === 1 && !boss.triggered && player.x > 850) {
-        boss.triggered = true;
-        boss.active = true;
-        document.getElementById('boss-container').style.display = 'block';
-        playBossBGM(); // 啟動戰鬥音樂
+    // 新增：更新 Boss 房間裡的小球狀態
+    if (currentRoom === 1) {
+        if (!boss.triggered && player.x > 850) {
+            boss.triggered = true; boss.active = true;
+            document.getElementById('boss-container').style.display = 'block';
+            playBGM('boss');
+        }
+        
+        particles.forEach(p => {
+            p.x += p.vx;
+            p.y += p.vy;
+            // 如果小球漂到畫面上方，讓它從最底下重新出現
+            if (p.y < -10) {
+                p.y = world.height + 10;
+                p.x = Math.random() * world.width;
+            }
+        });
     }
 
     camera.x = player.x - canvas.width / 2;
@@ -226,7 +255,7 @@ function update() {
             e.velX = 0; let d = Math.abs(player.x - e.x);
             if (e.type === 'melee' && d < 450) { e.dir = player.x > e.x ? 1 : -1; e.velX = e.dir * 3.5; }
             if (e.type === 'shooter' && d < 650 && Date.now() - e.lastShot > 2500) {
-                projectiles.push({ x: e.x, y: e.y + 15, w: 12, h: 12, velX: (player.x > e.x ? 1 : -1) * 5, owner: 'enemy' });
+                projectiles.push({ x: e.x, y: e.y + 15, w: 15, h: 15, velX: (player.x > e.x ? 1 : -1) * 5, owner: 'enemy' });
                 e.lastShot = Date.now();
             }
         }
@@ -240,10 +269,10 @@ function update() {
         let teleportFreq = boss.phase === 2 ? 150 : 250;
         if (boss.timer % teleportFreq === 0) {
             boss.x = 200 + Math.random() * (world.width - 400);
-            playSfx(100, 'sine', 0.2, 0.1); // 瞬移音效
+            playSfx(100, 'sine', 0.2, 0.1); 
         }
         if (boss.phase === 2 && boss.timer % 120 === 0) {
-            for(let i=-1; i<=1; i++) projectiles.push({ x: boss.x, y: boss.y + 50, w: 18, h: 18, velX: -8, velY: i*2, owner: 'enemy' });
+            for(let i=-1; i<=1; i++) projectiles.push({ x: boss.x, y: boss.y + 50, w: 20, h: 20, velX: -8, velY: i*2, owner: 'enemy' });
         }
         if (!player.invincible && isColl(player, boss)) takeDmg();
     }
@@ -256,14 +285,28 @@ function update() {
         } else {
             if (!player.invincible && isColl(p, player)) { takeDmg(); projectiles.splice(i, 1); }
         }
-        if (p.x < 0 || p.x > world.width) projectiles.splice(i, 1);
+        if (p.x < -100 || p.x > world.width + 100) projectiles.splice(i, 1);
     });
 
     enemies = enemies.filter(e => e.hp > 0);
+    
+    // Boss 死亡後的掉落邏輯
     if (boss.hp <= 0 && boss.active) {
-        boss.isDead = true; boss.active = false;
+        boss.isDead = true; 
+        boss.active = false;
         document.getElementById('boss-container').style.display = 'none';
-        endGame("遺忘皇后已成塵埃", "#bf40bf");
+        
+        // 在 Boss 位置掉落皇冠
+        crownItem.x = boss.x + boss.w/2 - crownItem.w/2;
+        crownItem.y = 450 - crownItem.h; // 掉落在地板上
+        crownItem.active = true;
+        playSfx(800, 'sine', 0.5, 0.2); // 勝利前的音效
+    }
+
+    // 皇冠撿取邏輯
+    if (crownItem.active && isColl(player, crownItem)) {
+        crownItem.active = false;
+        endGame("奪回宿命之冠", "#ffd700");
     }
 }
 
@@ -283,9 +326,7 @@ function checkMelee() {
     enemies.forEach(e => {
         if (isColl(hb, e)) { e.hp--; e.velX = player.facing * 12; e.kbTimer = 15; player.soul = Math.min(10, player.soul + 1); updateUI(); }
     });
-    if (boss.active && isColl(hb, boss)) { 
-        boss.hp--; player.soul = Math.min(10, player.soul + 1); updateUI(); 
-    }
+    if (boss.active && isColl(hb, boss)) { boss.hp--; player.soul = Math.min(10, player.soul + 1); updateUI(); }
 }
 
 function takeDmg() {
@@ -318,13 +359,33 @@ function playSfx(f, t, d, vol = 0.1) {
 
 function isColl(a, b) { return a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y; }
 
+let endingBgmInterval; // 新增：用來控制結束音樂的循環
+
 function endGame(t, c) {
-    gameActive = false; document.getElementById('overlay-text').innerText = t;
+    gameActive = false; 
+    if (bgmInterval) clearInterval(bgmInterval);
+    if (endingBgmInterval) clearInterval(endingBgmInterval); // 確保乾淨
+
+    document.getElementById('overlay-text').innerText = t;
     document.getElementById('overlay-text').style.color = c;
     document.getElementById('overlay').style.display = 'flex';
+
+    // --- 結束音樂循環邏輯 ---
+    const isVictory = t === "奪回宿命之冠";
+    const notes = isVictory ? [64, 67, 72, 71] : [48, 44, 43, 41]; // 勝利：清脆上行；失敗：沉重下行
+    const waveType = isVictory ? 'sine' : 'sawtooth';
+    let step = 0;
+
+    // 設定循環
+    endingBgmInterval = setInterval(() => {
+        const freq = 440 * Math.pow(2, (notes[step % notes.length] - 69) / 12);
+        playSfx(freq, waveType, 0.5, 0.15);
+        step++;
+    }, 600); 
 }
 
 function draw() {
+    const time = Date.now() / 1000;
     ctx.fillStyle = (currentRoom === 0) ? '#0a0a0f' : '#000810';
     ctx.fillRect(0, 0, canvas.width, canvas.height);
     
@@ -336,46 +397,143 @@ function draw() {
     ctx.save(); ctx.translate(-camera.x, 0);
 
     if (currentRoom === 0) {
-        ctx.strokeStyle = '#d4af37'; ctx.lineWidth = 5; ctx.strokeRect(2900, 150, 80, 300);
-        ctx.fillStyle = 'rgba(212,175,55,0.2)'; ctx.fillRect(2900, 150, 80, 300);
+        ctx.strokeStyle = '#d4af37'; ctx.lineWidth = 5; 
+        ctx.shadowBlur = 20; ctx.shadowColor = '#d4af37';
+        ctx.strokeRect(2900, 150, 80, 300);
+        ctx.fillStyle = `rgba(212,175,55,${0.1 + Math.sin(time*3)*0.1})`; 
+        ctx.fillRect(2900, 150, 80, 300);
+        ctx.shadowBlur = 0;
+    }
+
+    // 新增：當在 Boss 的房間時，畫出飄浮的發光小球
+    if (currentRoom === 1) {
+        ctx.save();
+        particles.forEach(p => {
+            ctx.beginPath();
+            ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
+            // 配合 Boss 的紫色風格
+            ctx.fillStyle = `rgba(191, 64, 191, ${p.alpha})`; 
+            ctx.shadowBlur = 10;
+            ctx.shadowColor = '#bf40bf';
+            ctx.fill();
+        });
+        ctx.restore();
     }
 
     platforms.forEach(p => {
-        ctx.fillStyle = (currentRoom === 0) ? '#222' : '#001a33';
+        let grad = ctx.createLinearGradient(p.x, p.y, p.x, p.y + p.h);
+        grad.addColorStop(0, currentRoom === 0 ? '#333' : '#002b4d');
+        grad.addColorStop(1, '#111');
+        ctx.fillStyle = grad;
         ctx.fillRect(p.x, p.y, p.w, p.h);
         ctx.fillStyle = (currentRoom === 0) ? '#d4af37' : '#00ffff';
         ctx.fillRect(p.x, p.y, p.w, 3);
     });
 
     enemies.forEach(e => {
-        ctx.fillStyle = (e.type === 'melee' ? '#500' : '#550');
-        ctx.fillRect(e.x, e.y, e.w, e.h);
+        ctx.save();
+        ctx.shadowBlur = 15;
+        if (e.type === 'melee') {
+            let grad = ctx.createLinearGradient(e.x, e.y, e.x + e.w, e.y + e.h);
+            grad.addColorStop(0, '#800'); grad.addColorStop(1, '#200');
+            ctx.fillStyle = grad; ctx.shadowColor = '#f00';
+            ctx.fillRect(e.x, e.y, e.w, e.h);
+            ctx.fillStyle = '#ff4d4d'; ctx.fillRect(e.dir === 1 ? e.x+25 : e.x+5, e.y+10, 10, 4);
+        } else {
+            let floating = Math.sin(time * 4) * 5;
+            let grad = ctx.createRadialGradient(e.x+20, e.y+20+floating, 5, e.x+20, e.y+20+floating, 25);
+            grad.addColorStop(0, '#ff0'); grad.addColorStop(1, '#440');
+            ctx.fillStyle = grad; ctx.shadowColor = '#ff0';
+            ctx.beginPath(); ctx.arc(e.x+20, e.y+20+floating, 18, 0, Math.PI*2); ctx.fill();
+        }
+        ctx.restore();
     });
 
     if (boss.active && !boss.isDead) {
-        ctx.fillStyle = '#bf40bf';
-        ctx.shadowBlur = boss.phase === 2 ? 40 : 20; ctx.shadowColor = '#bf40bf';
-        ctx.fillRect(boss.x, boss.y, boss.w, boss.h);
-        ctx.fillStyle = '#ffd700'; ctx.fillRect(boss.x + 20, boss.y - 15, 60, 15);
-        ctx.shadowBlur = 0;
+        ctx.save();
+        let bossFloat = Math.sin(time * 2) * 15;
+        ctx.translate(boss.x, boss.y + bossFloat);
+        let bossGrad = ctx.createLinearGradient(0, 0, 0, boss.h);
+        bossGrad.addColorStop(0, '#bf40bf'); bossGrad.addColorStop(1, 'transparent');
+        ctx.fillStyle = bossGrad;
+        ctx.shadowBlur = boss.phase === 2 ? 50 : 25; ctx.shadowColor = '#bf40bf';
+        ctx.beginPath();
+        ctx.moveTo(0, 30); ctx.lineTo(boss.w, 30); ctx.lineTo(boss.w + 20, boss.h); ctx.lineTo(-20, boss.h);
+        ctx.closePath(); ctx.fill();
+        ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(boss.w/2, 40, 15, 0, Math.PI*2); ctx.fill();
+        ctx.fillStyle = '#ffd700'; ctx.shadowColor = '#ffd700';
+        ctx.fillRect(15, -10, 70, 15);
+        for(let i=0; i<3; i++) {
+            ctx.beginPath(); ctx.moveTo(20+i*25, -10); ctx.lineTo(35+i*25, -30); ctx.lineTo(50+i*25, -10); ctx.fill();
+        }
+        ctx.restore();
+    }
+
+    // 繪製掉落的皇冠
+    if (crownItem.active) {
+        ctx.save();
+        let crownFloat = Math.sin(time * 5) * 8;
+        ctx.translate(crownItem.x, crownItem.y + crownFloat);
+        ctx.fillStyle = '#ffd700';
+        ctx.shadowBlur = 25;
+        ctx.shadowColor = '#ffd700';
+        // 皇冠底座
+        ctx.fillRect(0, 15, crownItem.w, 10);
+        // 皇冠尖端
+        for(let i=0; i<3; i++) {
+            ctx.beginPath();
+            ctx.moveTo(5 + i*15, 15);
+            ctx.lineTo(10 + i*15, 0);
+            ctx.lineTo(15 + i*15, 15);
+            ctx.fill();
+        }
+        ctx.restore();
     }
 
     if (!player.invincible || Math.floor(Date.now() / 100) % 2) {
-        ctx.fillStyle = '#00d4ff'; ctx.fillRect(player.x, player.y, player.w, player.h);
-        ctx.fillStyle = '#fff'; let ex = player.facing === 1 ? player.x + 18 : player.x + 6;
-        ctx.fillRect(ex, player.y + 12, 10, 8);
+        ctx.save();
+        let pGrad = ctx.createLinearGradient(player.x, player.y, player.x, player.y + player.h);
+        pGrad.addColorStop(0, '#00d4ff'); pGrad.addColorStop(1, '#005580');
+        ctx.fillStyle = pGrad;
+        ctx.shadowBlur = 15; ctx.shadowColor = '#00d4ff';
+        ctx.fillRect(player.x, player.y, player.w, player.h);
+        ctx.fillStyle = '#fff';
+        let coreSize = 6 + Math.sin(time*5) * 2;
+        ctx.beginPath(); ctx.arc(player.x + player.w/2, player.y + 15, coreSize, 0, Math.PI*2); ctx.fill();
+        ctx.strokeStyle = 'rgba(0, 212, 255, 0.5)'; ctx.lineWidth = 4;
+        ctx.beginPath();
+        ctx.moveTo(player.x + (player.facing === 1 ? 0 : player.w), player.y + 15);
+        ctx.bezierCurveTo(player.x - 20 * player.facing, player.y + 10, player.x - 30 * player.facing, player.y + 40, player.x - 40 * player.facing, player.y + 30);
+        ctx.stroke();
+        ctx.restore();
     }
 
     if (player.isAttacking) {
-        ctx.fillStyle = 'rgba(255,255,255,0.4)';
-        ctx.fillRect(player.facing === 1 ? player.x + player.w : player.x - 60, player.y + 5, 60, 35);
+        ctx.save();
+        let atkGrad = ctx.createLinearGradient(player.x, player.y, player.x + 80*player.facing, player.y);
+        atkGrad.addColorStop(0, 'rgba(255,255,255,0.8)'); atkGrad.addColorStop(1, 'transparent');
+        ctx.fillStyle = atkGrad;
+        ctx.shadowBlur = 20; ctx.shadowColor = '#fff';
+        let slashX = player.facing === 1 ? player.x + player.w : player.x - 70;
+        ctx.beginPath();
+        ctx.ellipse(slashX + 35, player.y + 25, 45, 25, 0, 0, Math.PI*2); ctx.fill();
+        ctx.restore();
     }
 
     projectiles.forEach(p => {
-        ctx.fillStyle = p.owner === 'player' ? '#0ff' : '#bf40bf';
-        ctx.shadowBlur = 10; ctx.shadowColor = ctx.fillStyle;
-        ctx.fillRect(p.x, p.y, p.w, p.h);
-        ctx.shadowBlur = 0;
+        ctx.save();
+        if (p.owner === 'player') {
+            ctx.fillStyle = '#0ff'; ctx.shadowBlur = 15; ctx.shadowColor = '#0ff';
+            ctx.beginPath();
+            ctx.moveTo(p.x, p.y + p.h/2); ctx.lineTo(p.x + p.w/2, p.y);
+            ctx.lineTo(p.x + p.w, p.y + p.h/2); ctx.lineTo(p.x + p.w/2, p.y + p.h);
+            ctx.closePath(); ctx.fill();
+        } else {
+            ctx.fillStyle = '#bf40bf'; ctx.shadowBlur = 20; ctx.shadowColor = '#bf40bf';
+            ctx.beginPath(); ctx.arc(p.x + p.w/2, p.y + p.h/2, p.w/2, 0, Math.PI*2); ctx.fill();
+            ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(p.x + p.w/2, p.y + p.h/2, p.w/4, 0, Math.PI*2); ctx.fill();
+        }
+        ctx.restore();
     });
 
     ctx.restore();
